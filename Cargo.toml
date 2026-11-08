@@ -1,6 +1,6 @@
 [package]
 name = "mvapp"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Windows 多螢幕視窗搬移工具：把視窗圖示拖放到另一個螢幕 / Move windows between monitors by drag and drop"
 
@@ -8,7 +8,7 @@ description = "Windows 多螢幕視窗搬移工具：把視窗圖示拖放到另
 eframe = "0.37.0"
 raw-window-handle = "0.6"
 tray-icon = "0.26.1"
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_System_Threading", "Win32_Graphics_Dwm", "Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_UI_Controls", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_Globalization", "Win32_System_Registry"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_System_Threading", "Win32_Graphics_Dwm", "Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_UI_Controls", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_Globalization", "Win32_System_Registry", "Win32_Security"] }
 
 [build-dependencies]
 embed-resource = "3.0.12"

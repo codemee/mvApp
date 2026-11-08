@@ -14,6 +14,7 @@ It shows one pane per active monitor, lists the GUI windows on that monitor as a
 - Click an icon to bring that window to the foreground.
 - Auto refresh; monitor hot-plug is supported.
 - Lives in the system tray: it starts in the tray only; double-click the tray icon to open the main window; the close button sends it back to the tray. The tray's right-click menu has "Run at startup" (a checkable toggle that writes to the current user's `HKCU\...\Run`, no administrator rights needed) and "Exit" (the only way to really quit).
+- Single instance: if mvApp is already running, launching it again just brings the existing main window forward and the new process exits (per Windows login session).
 - The toolbar has Refresh on the left and two flat three-state buttons on the right; each click moves to the next state: theme (follow system [half-filled circle] -> light [sun] -> dark [moon]) and language (follow system [globe] -> Traditional Chinese [中] -> English [En]). Settings are saved to `%APPDATA%\mvapp\settings.txt`.
 - A lightweight Windows 11 Fluent-style look: neutral background, thin-bordered groups (title set into the border), a white list area inside, and gray thin-line icons. The light theme takes its accent colors from the Gundam RX-78-2 (blue, red, yellow) and the dark theme from Neon Genesis Evangelion Unit-01 (dark purple, neon green, orange); they are used for the monitor icons and the drop highlight.
 

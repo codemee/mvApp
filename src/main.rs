@@ -7,6 +7,7 @@ mod icons;
 mod monitors;
 mod mover;
 mod settings;
+mod single_instance;
 mod toolbar;
 mod tray;
 mod windows_list;
@@ -64,6 +65,14 @@ mod smoke {
 }
 
 fn main() -> eframe::Result {
+    // 只允許執行一份：已有實例在執行時，通知它把主視窗叫出來，自己直接結束
+    let guard = match single_instance::acquire() {
+        single_instance::Acquire::First(g) => g,
+        single_instance::Acquire::AlreadyRunning => {
+            single_instance::notify_existing();
+            return Ok(());
+        }
+    };
     // Intel 的 Vulkan 驅動（igvk64.dll）在部分機器上會崩潰，預設改用 DX12；
     // 仍可由使用者自行設定 WGPU_BACKEND 覆寫。
     if std::env::var_os("WGPU_BACKEND").is_none() {
@@ -86,6 +95,8 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             setup_fonts(&cc.egui_ctx);
+            // 之後若有人再啟動第二份，由這條執行緒收到通知並顯示主視窗
+            guard.spawn_listener(&cc.egui_ctx);
             // 記下主視窗 HWND，供系統匣事件直接顯示／隱藏視窗
             if let Ok(RawWindowHandle::Win32(h)) = cc.window_handle().map(|h| h.as_raw()) {
                 tray::set_main_hwnd(h.hwnd.get());
