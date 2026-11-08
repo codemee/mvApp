@@ -34,3 +34,6 @@ cargo test
 ## Limitations
 - Windows running as administrator can only be moved if mvapp is also started as administrator (UIPI).
 - Switching windows across multiple virtual desktops is not supported.
+
+## License
+This project is licensed under the [GNU General Public License, version 3 or later (GPL-3.0-or-later)](LICENSE). You may use, study, modify and redistribute it under that license; when you distribute it (including modified versions), you must make the corresponding source code available under the GPL as well. See [LICENSE](LICENSE) for the full text.
