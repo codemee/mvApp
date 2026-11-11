@@ -4,6 +4,11 @@ use windows::Win32::Globalization::GetUserDefaultLocaleName;
 
 use crate::mover::MoveError;
 
+/// 應用程式顯示名稱。需與 build.rs 的 `APP_NAME` 一致（後者寫入 exe 的版本資訊）。
+pub const APP_NAME: &str = "mvApp-應用程式歸位器";
+/// 版本號，取自 Cargo.toml。
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// 實際使用的語言。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lang {
@@ -71,8 +76,13 @@ impl Tr {
         }
     }
 
-    pub fn app_title(self) -> &'static str {
-        self.pick("mvApp - 螢幕應用程式搬移", "mvApp - Move windows between monitors")
+    /// 應用程式顯示名稱＋版本號（視窗標題、系統匣提示共用）。
+    /// 版本號取自 Cargo.toml，升版時只需改那一處。
+    pub fn app_title(self) -> String {
+        match self.0 {
+            Lang::Zh => format!("{APP_NAME} v{VERSION}"),
+            Lang::En => format!("mvApp - Move windows between monitors v{VERSION}"),
+        }
     }
     pub fn hint(self) -> &'static str {
         self.pick("把圖示拖放到其他螢幕的窗格即可搬移視窗。", "Drag an icon onto another monitor's pane to move that window.")

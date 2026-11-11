@@ -7,7 +7,7 @@
 ## 環境與建置
 
 - 平台：僅限 Windows（目標 `x86_64-pc-windows-msvc`）。
-- 工具：Rust stable（edition 2024），以及 Visual Studio Build Tools（含 Windows SDK，建置時需要資源編譯器來編譯 `app.rc`）。
+- 工具：Rust stable（edition 2024），以及 Visual Studio Build Tools（含 Windows SDK，建置時需要資源編譯器 `rc.exe`）。
 - 主要相依套件：`eframe`／`egui` 0.37（介面）、`windows` 0.62（Win32 API）、`tray-icon` 0.26（系統匣）、`raw-window-handle` 0.6、`embed-resource`（建置時嵌入資源）。
 
 | 指令 | 用途 |
@@ -21,9 +21,20 @@
 
 - `.cargo/config.toml` 設定 `-C target-feature=+crt-static`，**靜態連結 VC++ 執行階段**，所以 exe 在沒有安裝 VC++ Redistributable 的電腦上也能直接執行。
 - `Cargo.toml` 的 `[profile.release]` 使用 `lto = true`、`codegen-units = 1`、`strip = true`、`panic = "abort"`，縮小檔案大小。
-- `build.rs` 透過 `embed-resource` 編譯 `app.rc`，內容有兩項：
+- `build.rs` 在建置時於 `OUT_DIR` 產生資源檔，再透過 `embed-resource` 編譯並嵌入 exe，內容有三項：
   - 資源 1：`app.manifest`，宣告 PerMonitorV2 的 DPI 感知。
   - 資源 2：`assets/icon.ico`（16～256 多尺寸，每個尺寸原生繪製）。系統匣圖示會以序號 2 直接載入，才能取得正確的小尺寸圖像。
+  - 版本資訊（`VERSIONINFO`）：顯示名稱與版本號，見下方〈顯示名稱與版本號〉。
+  - 資源編譯失敗會讓建置失敗，避免悄悄少了圖示或版本資訊。
+
+### 顯示名稱與版本號
+
+- 顯示名稱是「mvApp-應用程式歸位器」，後面接版本號（例如 `v0.1.2`）。版本號取自 `Cargo.toml` 的 `version`，**升版時只需改那一處**。
+- 顯示名稱用在兩類地方：
+  - 視窗標題與系統匣提示：`src/i18n.rs` 的 `Tr::app_title()`。中文介面顯示「mvApp-應用程式歸位器 v版本號」，英文介面顯示「mvApp - Move windows between monitors v版本號」。
+  - exe 的版本資訊（`FileDescription`、`ProductName`、`FileVersion`、`ProductVersion`）：由 `build.rs` 寫入。**工作列滑過按鈕的提示、工作管理員與檔案內容的「詳細資料」顯示的就是這裡**；沒有版本資訊時，Windows 會退回顯示檔名 `mvapp`。
+- 名稱字串在 `src/i18n.rs`（`APP_NAME`）與 `build.rs`（`APP_NAME`）各有一份，改名時兩邊要一起改。
+- 下列是內部識別碼，不是顯示名稱，改名時**不要動**，否則會讓既有的設定與單一執行個體機制失效：開機自動執行的登錄值名稱 `mvApp`、Mutex／Event 名稱、設定資料夾 `%APPDATA%\mvapp`、exe 檔名 `mvapp.exe`。
 
 ## 專案結構
 

@@ -7,7 +7,7 @@ For general usage see the [README](../README.en.md). This document is for develo
 ## Environment and build
 
 - Platform: Windows only (target `x86_64-pc-windows-msvc`).
-- Tools: Rust stable (edition 2024) and the Visual Studio Build Tools (including the Windows SDK; a resource compiler is needed to compile `app.rc`).
+- Tools: Rust stable (edition 2024) and the Visual Studio Build Tools (including the Windows SDK; the resource compiler `rc.exe` is needed at build time).
 - Main dependencies: `eframe` / `egui` 0.37 (UI), `windows` 0.62 (Win32 API), `tray-icon` 0.26 (system tray), `raw-window-handle` 0.6, and `embed-resource` (embeds resources at build time).
 
 | Command | Purpose |
@@ -21,9 +21,20 @@ For general usage see the [README](../README.en.md). This document is for develo
 
 - `.cargo/config.toml` sets `-C target-feature=+crt-static`, which **statically links the VC++ runtime**, so the exe runs on machines without the VC++ Redistributable.
 - `[profile.release]` in `Cargo.toml` uses `lto = true`, `codegen-units = 1`, `strip = true` and `panic = "abort"` to shrink the binary.
-- `build.rs` compiles `app.rc` via `embed-resource`, which contains two resources:
+- `build.rs` generates a resource file in `OUT_DIR` at build time and compiles it into the exe via `embed-resource`. It contains three things:
   - Resource 1: `app.manifest`, declaring PerMonitorV2 DPI awareness.
   - Resource 2: `assets/icon.ico` (multi-size, 16 to 256, each size drawn natively). The tray icon loads it by ordinal 2 so Windows can pick the right small size.
+  - Version information (`VERSIONINFO`): the display name and version number; see "Display name and version" below.
+  - If the resource compilation fails, the build fails, so the icon or version information can't silently go missing.
+
+### Display name and version
+
+- The display name is "mvApp-應用程式歸位器" followed by the version number (for example `v0.1.2`). The version comes from `version` in `Cargo.toml`, so **bumping a release only touches that one place**.
+- The display name is used in two kinds of places:
+  - The window title and tray tooltip: `Tr::app_title()` in `src/i18n.rs`. The Traditional Chinese UI shows "mvApp-應用程式歸位器 v<version>" and the English UI shows "mvApp - Move windows between monitors v<version>".
+  - The exe's version information (`FileDescription`, `ProductName`, `FileVersion`, `ProductVersion`), written by `build.rs`. **This is what the taskbar hover tooltip, Task Manager and the file properties "Details" tab show**; without version information Windows falls back to the file name `mvapp`.
+- The name string exists once in `src/i18n.rs` (`APP_NAME`) and once in `build.rs` (`APP_NAME`); change both when renaming.
+- The following are internal identifiers, not display names, and must **not** be changed when renaming, or existing settings and the single-instance mechanism would break: the run-at-startup registry value name `mvApp`, the mutex / event names, the settings folder `%APPDATA%\mvapp`, and the exe file name `mvapp.exe`.
 
 ## Project structure
 

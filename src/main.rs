@@ -80,10 +80,12 @@ fn main() -> eframe::Result {
         unsafe { std::env::set_var("WGPU_BACKEND", "dx12") };
     }
     let icon = eframe::icon_data::from_png_bytes(ICON_PNG).expect("icon.png 格式錯誤");
+    // 初始標題依使用者的語言設定決定，避免啟動瞬間出現錯誤語言的標題
+    let lang = settings::Settings::load().lang.resolve(i18n::system_lang());
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_icon(icon)
-            .with_title("mvApp - 螢幕應用程式搬移")
+            .with_title(i18n::Tr(lang).app_title())
             .with_inner_size([900.0, 520.0])
             .with_min_inner_size([400.0, 300.0])
             // 啟動時只顯示在系統匣，雙按系統匣圖示才顯示主視窗

@@ -28,7 +28,7 @@ const MIN_PANE_W: f32 = 300.0;
 const MIN_PANE_H: f32 = 230.0;
 
 /// 群組框上緣預留給「嵌在框線上的標題」的高度。
-const TITLE_GAP: f32 = 10.0;
+const TITLE_GAP: f32 = 9.0;
 /// 群組框內距（上方較大，讓出標題位置）。
 const GROUP_PAD: f32 = 10.0;
 const GROUP_PAD_TOP: f32 = 16.0;
@@ -389,7 +389,7 @@ impl eframe::App for App {
         // 語言改變時更新視窗標題與系統匣文字
         let lang = self.lang();
         if self.title_lang != Some(lang) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(Tr(lang).app_title().to_owned()));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(Tr(lang).app_title()));
             if let Some(t) = &self.tray {
                 t.set_lang(Tr(lang));
             }
@@ -408,6 +408,9 @@ impl eframe::App for App {
         // 工具列：左側為重新整理；右側為兩個扁平三態單鍵（語言、配色），點一下切換到下一個狀態
         let mut new_settings = self.settings;
         egui::Panel::top("toolbar")
+            // 工具列下方不畫分隔線（畫面較簡潔）；高度固定，也不需要拖曳調整
+            .show_separator_line(false)
+            .resizable(false)
             // 工具列：內距四邊 4、按鈕 34×34 → 高度 42；同組按鈕間距 4
             .frame(egui::Frame::new().fill(pal.bg).inner_margin(egui::Margin::same(4)))
             .show(ui, |ui| {
@@ -468,7 +471,8 @@ impl eframe::App for App {
 
         let Self { monitors, windows, icons, .. } = self;
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(pal.bg).inner_margin(egui::Margin::symmetric(8, 4)))
+            // 上方不留內距：與工具列之間的距離由群組標題的預留空間（TITLE_GAP）決定，才不會空白過大
+            .frame(egui::Frame::new().fill(pal.bg).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 4 }))
             .show(ui, |ui| {
                 if monitors.is_empty() {
                     ui.label(tr.no_monitor());
