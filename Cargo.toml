@@ -1,6 +1,6 @@
 [package]
 name = "mvapp"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Windows 多螢幕視窗搬移工具：把視窗圖示拖放到另一個螢幕 / Move windows between monitors by drag and drop"
 license = "GPL-3.0-or-later"
