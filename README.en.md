@@ -29,6 +29,7 @@ Open the main window and you get one pane per monitor, listing the windows curre
   2. Press the combination you want and it is applied; press `Esc` to cancel.
   3. To go back to the default, click the circular-arrow button next to it (hover it for a description).
   - Rules (also shown when you hover the hotkey button): it must include `Ctrl` or `Alt`, and the key can be `A`-`Z`, `0`-`9` or `F1`-`F12`.
+  - So that features in other programs keep working, **common shortcuts are not allowed**: plain `Ctrl+A` / `C` / `V` / `X` / `Z` / `Y` / `S` / `P` / `F` / `O` / `N` / `W` / `T` / `R`, `Ctrl+0`-`9`, `Ctrl+F4`, `Ctrl+F5` and `Alt+F4`. Adding `Shift` or another modifier (for example `Ctrl+Shift+C`) makes it allowed.
   - If another program already uses the combination, you are asked to pick another and the previous hotkey stays in effect.
 - **System tray**: closing the window does not quit the program; it just goes back to the tray. To really quit, right-click the tray icon and choose "Exit".
 

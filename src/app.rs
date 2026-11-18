@@ -153,6 +153,8 @@ enum Status {
 #[derive(Clone, Copy)]
 enum HotkeyMsg {
     NeedModifier,
+    /// 常用的編輯／系統快捷鍵（如 Ctrl+C），設成全域快捷鍵會讓其他程式失效。
+    Common(Hotkey),
     InUse(Hotkey),
 }
 
@@ -173,6 +175,8 @@ pub struct App {
     hotkey_panel: bool,
     /// 正在錄製新的快捷鍵（此時全域快捷鍵會暫時取消註冊，否則按下舊組合會被攔截）。
     capturing: bool,
+    /// 錄製中上一次偵測到的實際按鍵狀態（判斷「剛按下」用）。
+    key_state: hotkey::KeyState,
     hotkey_msg: Option<HotkeyMsg>,
 }
 
@@ -210,6 +214,7 @@ impl App {
             startup_frames: 0,
             hotkey_panel: false,
             capturing: false,
+            key_state: [false; 256],
             hotkey_msg: None,
         };
         a.refresh();
@@ -219,15 +224,17 @@ impl App {
     fn begin_capture(&mut self) {
         self.capturing = true;
         self.hotkey_msg = None;
+        self.key_state = hotkey::snapshot();
         hotkey::set(None);
     }
 
-    /// 結束錄製（取消或離開）並恢復原本的快捷鍵。
+    /// 結束錄製（取消或離開）並恢復原本的快捷鍵，同時清掉錄製時的錯誤提示。
     fn cancel_capture(&mut self) {
         if self.capturing {
             self.capturing = false;
             hotkey::set(Some(self.settings.hotkey));
         }
+        self.hotkey_msg = None;
     }
 
     /// 套用新的快捷鍵；註冊失敗（被佔用）時維持舊的。
@@ -255,15 +262,21 @@ impl App {
                 _ => None,
             })
         });
-        let Some((key, mods)) = hit else { return };
-        if key == egui::Key::Escape && !mods.any() {
+        if matches!(hit, Some((egui::Key::Escape, m)) if !m.any()) {
             self.cancel_capture();
-        } else if let Some(hk) = Hotkey::from_egui(key, mods) {
-            if hk.is_valid() {
-                self.apply_hotkey(hk);
-            } else {
-                self.hotkey_msg = Some(HotkeyMsg::NeedModifier);
-            }
+            return;
+        }
+        // 每個影格都要查詢（即使 egui 已收到按鍵）才能維持「上一次狀態」的記錄。
+        // 這是補強：egui-winit 會把 Ctrl+X/C/V 轉成剪貼簿事件、且剪貼簿沒內容時連事件都沒有，
+        // 光靠 egui 的按鍵事件會漏掉這幾組。
+        let polled = hotkey::poll_pressed(&mut self.key_state);
+        let Some(hk) = hit.and_then(|(k, m)| Hotkey::from_egui(k, m)).or(polled) else { return };
+        if !hk.is_valid() {
+            self.hotkey_msg = Some(HotkeyMsg::NeedModifier);
+        } else if hk.is_common() {
+            self.hotkey_msg = Some(HotkeyMsg::Common(hk));
+        } else {
+            self.apply_hotkey(hk);
         }
     }
 
@@ -476,6 +489,10 @@ impl eframe::App for App {
             }
             self.title_lang = Some(lang);
         }
+        // 錄製快捷鍵時以直接查詢按鍵狀態的方式偵測，需要較頻繁的更新才不會漏掉很短的按鍵
+        if self.capturing {
+            ctx.request_repaint_after(Duration::from_millis(30));
+        }
         ctx.request_repaint_after(REFRESH);
     }
 
@@ -589,6 +606,10 @@ impl eframe::App for App {
                             match self.hotkey_msg {
                                 Some(HotkeyMsg::NeedModifier) => {
                                     let t = egui::RichText::new(tr.hotkey_need_modifier()).size(12.0).color(pal.accents[1]);
+                                    ui.label(t);
+                                }
+                                Some(HotkeyMsg::Common(hk)) => {
+                                    let t = egui::RichText::new(tr.hotkey_common(&hk.label())).size(12.0).color(pal.accents[1]);
                                     ui.label(t);
                                 }
                                 Some(HotkeyMsg::InUse(hk)) => {

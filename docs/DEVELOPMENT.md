@@ -112,9 +112,10 @@
 - **專用執行緒**：`RegisterHotKey(NULL, …)` 要求註冊與接收 `WM_HOTKEY` 在同一條執行緒，而 eframe 的事件迴圈不處理執行緒訊息。所以 `hotkey::start` 另開一條執行緒跑 `GetMessageW` 迴圈：
   - 先用 `PeekMessageW` 建立訊息佇列，再把執行緒 ID 回報給呼叫端（避免 `PostThreadMessageW` 太早送出而失敗）。
   - 變更快捷鍵時，`hotkey::set` 把新組合與回覆用的 channel 送進佇列，以 `PostThreadMessageW(WM_APP)` 喚醒該執行緒，由它取消舊註冊、註冊新組合，並同步回傳成功與否（失敗通常是被其他程式佔用）。
-- **組合鍵格式**：`Hotkey { ctrl, alt, shift, vk }`。文字格式如 `Ctrl+Shift+M`，同時是設定檔的存放格式（`hotkey=Ctrl+Shift+M`），`parse` 不分大小寫。必須包含 `Ctrl` 或 `Alt`；主鍵限 `A`–`Z`、`0`–`9`、`F1`–`F12`。egui 按鍵由 `Key::name()` 轉為虛擬鍵碼。設定檔內容不合法時退回預設值。
+- **組合鍵格式**：`Hotkey { ctrl, alt, shift, vk }`。文字格式如 `Ctrl+Shift+M`，同時是設定檔的存放格式（`hotkey=Ctrl+Shift+M`），`parse` 不分大小寫。必須包含 `Ctrl` 或 `Alt`；主鍵限 `A`–`Z`、`0`–`9`、`F1`–`F12`。`Hotkey::is_common` 另外擋掉常用快捷鍵（只限沒有 Shift 的 `Ctrl+A/C/V/X/Z/Y/S/P/F/O/N/W/T/R`、`Ctrl+0`–`9`、`Ctrl+F4`、`Ctrl+F5`、`Alt+F4`），因為全域快捷鍵優先於各程式自己的快捷鍵，會讓這些功能在整個系統失效；`parse` 也會拒絕，所以設定檔裡被手動改成這類組合時會退回預設值。egui 按鍵由 `Key::name()` 轉為虛擬鍵碼。設定檔內容不合法時退回預設值。
 - **設定面板**（`app.rs`）：工具列的鍵盤按鈕切換 `hotkey_panel`，面板是浮動的 `egui::Area`（`Order::Foreground`，靠右對齊工具列下緣），疊在內容上方而不是 `Panel`，所以展開時不會壓縮主視窗的版面。寬度上限 360，視窗太窄時隨視窗縮小。
-  - 錄製：點按鈕後 `capturing = true`，並**先取消全域註冊**，否則按下舊組合時訊息會被全域快捷鍵攔走，視窗收不到按鍵。下一個 `Event::Key`（按下、非重複）即為新組合；`Esc` 取消。
+  - 錄製：點按鈕後 `capturing = true`，並**先取消全域註冊**，否則按下舊組合時訊息會被全域快捷鍵攔走，視窗收不到按鍵。下一個 `Event::Key`（按下、非重複）即為新組合；`Esc` 取消。注意 egui-winit 會把 `Ctrl+X/C/V` 轉成 `Event::Cut/Copy/Paste` 且**不會再送 `Event::Key`**；而且剪貼簿沒有可貼上的內容時，連 `Paste` 事件都不會有。所以只靠 egui 事件會漏掉這幾組，`poll_capture` 同時用 `hotkey::poll_pressed`（`GetAsyncKeyState`，與前一次狀態比對出「剛按下」的鍵，並讀取當下的 Ctrl／Alt／Shift）直接查詢實際按鍵。開始錄製時先 `snapshot` 一次，避免把已按著的鍵當成新按下；錄製期間每 30 ms 重繪一次，避免漏掉很短的按鍵。`Esc` 仍走 egui 事件。
+  - 錯誤提示（`hotkey_msg`）在開始錄製、取消錄製、收合面板時都會清掉，重新打開面板不會殘留上次的紅字。
   - 套用：`apply_hotkey` 先註冊；成功才寫入設定，失敗則恢復舊的註冊並顯示「已被其他程式使用」。
   - 離開錄製的所有路徑（取消、收合面板、關閉視窗縮回系統匣、視窗失去焦點）都會呼叫 `cancel_capture` 恢復註冊，避免快捷鍵停留在未註冊的狀態。
 - 面板內容：第一行說明文字，第二行快捷鍵按鈕與「還原預設」圖示（`toolbar::icon_reset`，逆時針圈圈箭頭），列高固定 34 讓兩者垂直置中。操作方式與組合規則放在快捷鍵按鈕的 hover 提示，面板上只在出錯時才多一行紅字。
@@ -166,7 +167,7 @@ cargo test
 ```
 
 - `mover`：座標換算的單元測試（同尺寸螢幕、不同尺寸螢幕、夾限）。
-- `hotkey`：組合鍵的格式化與解析（含不合法輸入）、egui 按鍵轉虛擬鍵碼。實際的註冊與觸發不在單元測試內，需手動驗證。
+- `hotkey`：組合鍵的格式化與解析（含不合法輸入、常用快捷鍵會被拒絕）、egui 按鍵轉虛擬鍵碼。實際的註冊與觸發不在單元測試內，需手動驗證。
 - `smoke`：螢幕、視窗、圖示列舉的煙霧測試。這些需要在有桌面的登入工作階段中執行。
 - `autostart`：實際寫入再刪除 `HKCU` 的 `Run` 值。若執行時使用者已啟用開機自動執行，測試會略過，避免動到真實設定。
 

@@ -156,8 +156,8 @@ impl Tr {
     /// 快捷鍵按鈕的提示：操作方式與組合規則。
     pub fn hotkey_change_tip(self) -> &'static str {
         self.pick(
-            "點一下，再按下想要的組合鍵（Esc 取消）\n需包含 Ctrl 或 Alt，主鍵可用 A–Z、0–9、F1–F12。",
-            "Click, then press the combination you want (Esc to cancel)\nMust include Ctrl or Alt; the key can be A–Z, 0–9 or F1–F12.",
+            "點一下，再按下想要的組合鍵（Esc 取消）\n需包含 Ctrl 或 Alt，主鍵可用 A–Z、0–9、F1–F12；Ctrl+C、Ctrl+V 等常用快捷鍵不能使用。",
+            "Click, then press the combination you want (Esc to cancel)\nMust include Ctrl or Alt; the key can be A–Z, 0–9 or F1–F12. Common shortcuts such as Ctrl+C and Ctrl+V are not allowed.",
         )
     }
     /// 還原按鈕（圈圈箭頭）的提示。
@@ -169,6 +169,12 @@ impl Tr {
     }
     pub fn hotkey_need_modifier(self) -> &'static str {
         self.pick("請至少搭配 Ctrl 或 Alt。", "Please include Ctrl or Alt.")
+    }
+    pub fn hotkey_common(self, label: &str) -> String {
+        match self.0 {
+            Lang::Zh => format!("{label} 是常用的快捷鍵，設成全域快捷鍵會讓其他程式無法使用，請換一組。"),
+            Lang::En => format!("{label} is a common shortcut; making it global would break it in other programs. Please pick another."),
+        }
     }
     pub fn hotkey_in_use(self, label: &str) -> String {
         match self.0 {

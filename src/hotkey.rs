@@ -11,7 +11,8 @@ use eframe::egui;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey, UnregisterHotKey,
+    GetAsyncKeyState, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey,
+    UnregisterHotKey,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetMessageW, MSG, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, WM_APP, WM_HOTKEY,
@@ -35,6 +36,25 @@ impl Hotkey {
     /// 至少要有 Ctrl 或 Alt；只用 Shift 或不用修飾鍵會讓一般打字無法使用該鍵。
     pub fn is_valid(&self) -> bool {
         (self.ctrl || self.alt) && key_name(self.vk).is_some()
+    }
+
+    /// 是否為常用的編輯／系統快捷鍵（只擋「單純 Ctrl＋鍵」與 Alt+F4 這類最容易誤設的組合）。
+    /// 設成全域快捷鍵會讓其他程式裡的這些功能失效，所以不允許；帶 Shift 的變體不受限。
+    pub fn is_common(&self) -> bool {
+        if self.shift {
+            return false;
+        }
+        match (self.ctrl, self.alt) {
+            // Ctrl+字母：全選、複製、貼上、剪下、復原、取消復原、儲存、列印、尋找、開啟、新增、關閉、新分頁、重新整理
+            (true, false) => match self.vk {
+                0x41 | 0x43 | 0x56 | 0x58 | 0x5A | 0x59 | 0x53 | 0x50 | 0x46 | 0x4F | 0x4E | 0x57 | 0x54 | 0x52 => true,
+                0x30..=0x39 => true, // Ctrl+數字：瀏覽器切換分頁、縮放
+                0x73 | 0x74 => true, // Ctrl+F4 關閉分頁、Ctrl+F5 重新整理
+                _ => false,
+            },
+            (false, true) => self.vk == 0x73, // Alt+F4 關閉視窗
+            _ => false,
+        }
     }
 
     /// 顯示用文字，例如 `Ctrl+Shift+M`；同時也是設定檔的存放格式。
@@ -65,7 +85,7 @@ impl Hotkey {
                 _ => return None, // 出現第二個主鍵
             }
         }
-        hk.is_valid().then_some(hk)
+        (hk.is_valid() && !hk.is_common()).then_some(hk)
     }
 
     /// 由 egui 的按鍵事件組成快捷鍵；主鍵不在支援範圍（A–Z、0–9、F1–F12）時回傳 `None`。
@@ -110,6 +130,43 @@ fn key_from_name(name: &str) -> Option<u32> {
         }
         _ => None,
     }
+}
+
+/// 各虛擬鍵上一次偵測到的按下狀態（用來判斷「剛按下」）。
+pub type KeyState = [bool; 256];
+
+fn is_down(vk: u32) -> bool {
+    unsafe { (GetAsyncKeyState(vk as i32) as u16) & 0x8000 != 0 }
+}
+
+/// 支援作為主鍵的虛擬鍵碼：0–9、A–Z、F1–F12。
+fn supported_vks() -> impl Iterator<Item = u32> {
+    (0x30..=0x39).chain(0x41..=0x5A).chain(0x70..=0x7B)
+}
+
+/// 目前的按鍵狀態快照；開始錄製時先拍一張，避免把「已經按著」的鍵當成新按下。
+pub fn snapshot() -> KeyState {
+    let mut s = [false; 256];
+    for vk in supported_vks() {
+        s[vk as usize] = is_down(vk);
+    }
+    s
+}
+
+/// 直接向系統查詢實際按鍵，回傳這次「剛按下」的組合（含當下的 Ctrl／Alt／Shift）。
+///
+/// 錄製快捷鍵不能只靠 egui 的按鍵事件：egui-winit 會把 Ctrl+X/C/V 轉成剪貼簿事件，
+/// 且剪貼簿沒有可貼上的內容時連事件都不會送，這幾組就完全收不到。
+pub fn poll_pressed(prev: &mut KeyState) -> Option<Hotkey> {
+    let mut found = None;
+    for vk in supported_vks() {
+        let down = is_down(vk);
+        if down && !prev[vk as usize] && found.is_none() {
+            found = Some(Hotkey { ctrl: is_down(0x11), alt: is_down(0x12), shift: is_down(0x10), vk });
+        }
+        prev[vk as usize] = down;
+    }
+    found
 }
 
 const HOTKEY_ID: i32 = 1;
@@ -193,7 +250,20 @@ mod tests {
         let f5 = Hotkey::parse("Alt+F5").unwrap();
         assert_eq!((f5.alt, f5.vk), (true, 0x74));
         assert_eq!(f5.label(), "Alt+F5");
-        assert_eq!(Hotkey::parse("Ctrl+0").unwrap().vk, 0x30);
+        assert_eq!(Hotkey::parse("Alt+0").unwrap().vk, 0x30);
+    }
+
+    #[test]
+    fn common_shortcuts_are_rejected() {
+        for s in ["Ctrl+C", "Ctrl+V", "Ctrl+X", "Ctrl+Z", "Ctrl+A", "Ctrl+S", "Ctrl+1", "Ctrl+F4", "Alt+F4"] {
+            assert_eq!(Hotkey::parse(s), None, "{s} 應被拒絕");
+        }
+        // 帶 Shift 的變體、或其他組合不受限
+        for s in ["Ctrl+Shift+M", "Ctrl+Shift+C", "Ctrl+Alt+C", "Alt+C", "Ctrl+M", "Ctrl+F6"] {
+            assert!(Hotkey::parse(s).is_some(), "{s} 應被接受");
+        }
+        assert!(Hotkey::parse("Ctrl+C").is_none());
+        assert!(!DEFAULT.is_common());
     }
 
     #[test]
