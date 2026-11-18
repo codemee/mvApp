@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Color32, Stroke, ThemePreference, Vec2};
 use windows::Win32::UI::WindowsAndMessaging::{IsIconic, SW_RESTORE, SetForegroundWindow, ShowWindow};
 
+use crate::hotkey::{self, Hotkey};
 use crate::i18n::{self, Lang, LangPref, Tr};
 use crate::icons::IconCache;
 use crate::monitors::{self, Monitor};
@@ -143,6 +144,16 @@ enum Status {
     Hint,
     Moved { title: String, to: usize },
     Failed(MoveError),
+    /// 啟動時註冊快捷鍵失敗（多半被其他程式佔用）。
+    HotkeyStartupFailed(Hotkey),
+    HotkeyChanged(Hotkey),
+}
+
+/// 快捷鍵設定面板上的錯誤提示。
+#[derive(Clone, Copy)]
+enum HotkeyMsg {
+    NeedModifier,
+    InUse(Hotkey),
 }
 
 pub struct App {
@@ -158,6 +169,11 @@ pub struct App {
     tray: Option<Tray>,
     /// 已執行的啟動影格數（用來在 eframe 顯示視窗之後把它藏起來）。
     startup_frames: u8,
+    /// 快捷鍵設定面板是否展開。
+    hotkey_panel: bool,
+    /// 正在錄製新的快捷鍵（此時全域快捷鍵會暫時取消註冊，否則按下舊組合會被攔截）。
+    capturing: bool,
+    hotkey_msg: Option<HotkeyMsg>,
 }
 
 impl App {
@@ -175,20 +191,80 @@ impl App {
                 None
             }
         };
+        hotkey::start(ctx);
+        let status = if hotkey::set(Some(settings.hotkey)) {
+            Status::Hint
+        } else {
+            Status::HotkeyStartupFailed(settings.hotkey)
+        };
         let mut a = App {
             monitors: Vec::new(),
             windows: Vec::new(),
             icons: IconCache::default(),
             last: Instant::now(),
-            status: Status::Hint,
+            status,
             settings,
             system_lang,
             title_lang: None,
             tray,
             startup_frames: 0,
+            hotkey_panel: false,
+            capturing: false,
+            hotkey_msg: None,
         };
         a.refresh();
         a
+    }
+
+    fn begin_capture(&mut self) {
+        self.capturing = true;
+        self.hotkey_msg = None;
+        hotkey::set(None);
+    }
+
+    /// 結束錄製（取消或離開）並恢復原本的快捷鍵。
+    fn cancel_capture(&mut self) {
+        if self.capturing {
+            self.capturing = false;
+            hotkey::set(Some(self.settings.hotkey));
+        }
+    }
+
+    /// 套用新的快捷鍵；註冊失敗（被佔用）時維持舊的。
+    fn apply_hotkey(&mut self, hk: Hotkey) {
+        self.capturing = false;
+        if hotkey::set(Some(hk)) {
+            self.settings.hotkey = hk;
+            self.settings.save();
+            self.hotkey_msg = None;
+            self.status = Status::HotkeyChanged(hk);
+        } else {
+            hotkey::set(Some(self.settings.hotkey));
+            self.hotkey_msg = Some(HotkeyMsg::InUse(hk));
+        }
+    }
+
+    /// 錄製中：取得下一個按下的組合鍵。
+    fn poll_capture(&mut self, ctx: &egui::Context) {
+        if !self.capturing {
+            return;
+        }
+        let hit = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } => Some((*key, *modifiers)),
+                _ => None,
+            })
+        });
+        let Some((key, mods)) = hit else { return };
+        if key == egui::Key::Escape && !mods.any() {
+            self.cancel_capture();
+        } else if let Some(hk) = Hotkey::from_egui(key, mods) {
+            if hk.is_valid() {
+                self.apply_hotkey(hk);
+            } else {
+                self.hotkey_msg = Some(HotkeyMsg::NeedModifier);
+            }
+        }
     }
 
     fn lang(&self) -> Lang {
@@ -384,7 +460,12 @@ impl eframe::App for App {
             && ctx.input(|i| i.viewport().close_requested())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.cancel_capture();
             tray::hide_main();
+        }
+        // 錄製中視窗失去焦點就放棄，避免全域快捷鍵一直處於取消註冊的狀態
+        if self.capturing && !ctx.input(|i| i.focused) {
+            self.cancel_capture();
         }
         // 語言改變時更新視窗標題與系統匣文字
         let lang = self.lang();
@@ -404,6 +485,10 @@ impl eframe::App for App {
         let mut refresh_now = false;
         let tr = Tr(self.lang());
         let pal = Palette::new(ui.visuals().dark_mode);
+        self.poll_capture(ui.ctx());
+        let mut toggle_hotkey_panel = false;
+        let mut start_capture = false;
+        let mut reset_hotkey = false;
 
         // 工具列：左側為重新整理；右側為兩個扁平三態單鍵（語言、配色），點一下切換到下一個狀態
         let mut new_settings = self.settings;
@@ -442,14 +527,91 @@ impl eframe::App for App {
                         if toolbar::icon_button(ui, &tip, icon, rs, pal.muted, pal.bg, pal.hover) {
                             new_settings.lang = next;
                         }
+
+                        // 快捷鍵設定（展開面板的切換鈕）：與語言、配色同一組，排在語言左邊
+                        let open = self.hotkey_panel;
+                        let rn = toolbar::RADIUS_NORMAL;
+                        if toolbar::icon_button_ex(ui, tr.hotkey_tip(), toolbar::icon_keyboard, rn, pal.muted, pal.bg, pal.hover, open) {
+                            toggle_hotkey_panel = true;
+                        }
                         // 與左側（重新整理）區隔的分隔線
                         toolbar::separator(ui, pal.border);
                     });
                 });
             });
+        if toggle_hotkey_panel {
+            self.hotkey_panel = !self.hotkey_panel;
+            if !self.hotkey_panel {
+                self.cancel_capture();
+            }
+        }
+        // 快捷鍵設定面板：浮在主視窗內容上方、靠右對齊工具列下緣，不佔用版面
+        if self.hotkey_panel {
+            // 寬度依內容決定；只有錯誤提示這類長文字才會在此上限換行
+            let max_w = (ui.ctx().content_rect().width() - 40.0).clamp(160.0, 240.0);
+            egui::Area::new(ui.scope_id().with("hotkey_popup"))
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::RIGHT_TOP, Vec2::new(-8.0, 46.0))
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style())
+                        .fill(pal.group)
+                        .stroke(Stroke::new(1.0, pal.border))
+                        .corner_radius(8)
+                        .inner_margin(egui::Margin::symmetric(12, 10))
+                        .show(ui, |ui| {
+                            ui.set_max_width(max_w);
+                            // 第一行：說明文字
+                            ui.label(egui::RichText::new(tr.hotkey_label()).size(13.0));
+                            // 第二行：快捷鍵按鈕＋還原圖示
+                            ui.horizontal(|ui| {
+                                // 以最高的元件（34 高的圖示按鈕）為列高，讓兩者垂直置中對齊
+                                ui.set_min_height(34.0);
+                                let (text, color) = if self.capturing {
+                                    (tr.hotkey_recording().to_owned(), pal.accent)
+                                } else {
+                                    (self.settings.hotkey.label(), pal.text)
+                                };
+                                let key_btn = egui::Button::new(egui::RichText::new(text).size(13.0).strong().color(color))
+                                    .min_size(Vec2::new(130.0, 30.0))
+                                    .stroke(Stroke::new(1.0, if self.capturing { pal.accent } else { pal.border }));
+                                if ui.add(key_btn).on_hover_text(tr.hotkey_change_tip()).clicked() && !self.capturing {
+                                    start_capture = true;
+                                }
+                                // 還原預設：圈圈箭頭圖示；已是預設值時圖示變淡且點了不做事
+                                let is_default = self.settings.hotkey == hotkey::DEFAULT;
+                                let fg = if is_default { mix(pal.muted, pal.group, 0.6) } else { pal.muted };
+                                let tip = tr.hotkey_reset_tip(&hotkey::DEFAULT.label());
+                                let rn = toolbar::RADIUS_NORMAL;
+                                if toolbar::icon_button(ui, &tip, toolbar::icon_reset, rn, fg, pal.group, pal.hover) && !is_default {
+                                    reset_hotkey = true;
+                                }
+                            });
+                            match self.hotkey_msg {
+                                Some(HotkeyMsg::NeedModifier) => {
+                                    let t = egui::RichText::new(tr.hotkey_need_modifier()).size(12.0).color(pal.accents[1]);
+                                    ui.label(t);
+                                }
+                                Some(HotkeyMsg::InUse(hk)) => {
+                                    let t = egui::RichText::new(tr.hotkey_in_use(&hk.label())).size(12.0).color(pal.accents[1]);
+                                    ui.label(t);
+                                }
+                                None => {}
+                            }
+                        });
+                });
+        }
+        if start_capture {
+            self.begin_capture();
+        }
+        if reset_hotkey {
+            self.cancel_capture();
+            self.apply_hotkey(hotkey::DEFAULT);
+        }
         if refresh_now {
             self.last = Instant::now() - REFRESH;
         }
+        // 快捷鍵由面板（apply_hotkey）自行更新；工具列開頭複製的 new_settings 帶的是舊值，不能拿來蓋回去
+        new_settings.hotkey = self.settings.hotkey;
         if new_settings != self.settings {
             if new_settings.theme != self.settings.theme {
                 ui.ctx().set_theme(new_settings.theme);
@@ -462,6 +624,8 @@ impl eframe::App for App {
             Status::Hint => tr.hint().to_owned(),
             Status::Moved { title, to } => tr.moved(title, *to),
             Status::Failed(e) => tr.move_failed(e),
+            Status::HotkeyStartupFailed(hk) => tr.hotkey_startup_failed(&hk.label()),
+            Status::HotkeyChanged(hk) => tr.hotkey_changed(&hk.label()),
         };
         egui::Panel::bottom("status")
             .frame(egui::Frame::new().fill(pal.bg).inner_margin(egui::Margin::symmetric(12, 5)))

@@ -1,13 +1,13 @@
 //! 視窗搬移邏輯。
 
-use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
+use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowRect, IsIconic, IsZoomed, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE,
-    SWP_NOZORDER, SetWindowPos, ShowWindow,
+    GetWindowPlacement, GetWindowRect, IsIconic, IsZoomed, SWP_NOACTIVATE, SWP_NOZORDER,
+    SetWindowPlacement, SetWindowPos, WINDOWPLACEMENT,
 };
 
 use crate::monitors::{Monitor, Rc};
-use crate::windows_list::hwnd_of;
+use crate::windows_list::{hidden_siblings, hwnd_of, monitor_of, pid_of};
 
 /// 搬移失敗原因（顯示文字由 UI 依語言決定）。
 #[derive(Clone, Debug)]
@@ -33,53 +33,53 @@ pub fn map_rect(src: Rc, dst: Rc, r: Rc) -> Rc {
     Rc { left: x as i32, top: y as i32, right: (x + w) as i32, bottom: (y + h) as i32 }
 }
 
+/// 以 `SetWindowPos` 搬移一般（非最小化、非最大化）視窗。
+fn set_pos(h: HWND, n: Rc) -> windows::core::Result<()> {
+    // 跨 DPI 螢幕時，系統可能在第一次移動後重新調整大小，故設定兩次
+    for _ in 0..2 {
+        unsafe {
+            SetWindowPos(h, None, n.left, n.top, n.width(), n.height(), SWP_NOZORDER | SWP_NOACTIVATE)?;
+        }
+    }
+    Ok(())
+}
+
 /// 把視窗搬到目標螢幕。
+///
+/// - 最小化 / 最大化的視窗只改「還原後的位置」，維持原本狀態，不會閃動。
+/// - 最小化的視窗若有同行程的隱藏主視窗（Delphi 類程式的工作列代理視窗），一併搬移。
 pub fn move_window(hwnd: isize, dst: &Monitor, monitors: &[Monitor]) -> Result<(), MoveError> {
     let h = hwnd_of(hwnd);
-    let cur = unsafe { MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST) };
-    let src = monitors
-        .iter()
-        .find(|m| m.handle == cur.0 as isize)
-        .ok_or(MoveError::NoSourceMonitor)?;
+    let cur = monitor_of(h);
+    let src = monitors.iter().find(|m| m.handle == cur).ok_or(MoveError::NoSourceMonitor)?;
     if src.handle == dst.handle {
         return Ok(());
     }
     unsafe {
         let was_min = IsIconic(h).as_bool();
+        if was_min || IsZoomed(h).as_bool() {
+            let mut wp = WINDOWPLACEMENT { length: std::mem::size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
+            GetWindowPlacement(h, &mut wp).map_err(|_| MoveError::ReadRect)?;
+            let n = map_rect(src.work, dst.work, wp.rcNormalPosition.into());
+            wp.rcNormalPosition = RECT { left: n.left, top: n.top, right: n.right, bottom: n.bottom };
+            SetWindowPlacement(h, &wp).map_err(|e| MoveError::Denied(e.to_string()))?;
+        } else {
+            let mut rect = RECT::default();
+            GetWindowRect(h, &mut rect).map_err(|_| MoveError::ReadRect)?;
+            let n = map_rect(src.work, dst.work, rect.into());
+            set_pos(h, n).map_err(|e| MoveError::Denied(e.to_string()))?;
+        }
         if was_min {
-            let _ = ShowWindow(h, SW_RESTORE);
-        }
-        let was_max = IsZoomed(h).as_bool();
-        if was_max {
-            let _ = ShowWindow(h, SW_RESTORE);
-        }
-        let mut rect = windows::Win32::Foundation::RECT::default();
-        GetWindowRect(h, &mut rect).map_err(|_| MoveError::ReadRect)?;
-        let n = map_rect(src.work, dst.work, rect.into());
-        // 跨 DPI 螢幕時，系統可能在第一次移動後重新調整大小，故設定兩次
-        let mut res = Ok(());
-        for _ in 0..2 {
-            res = SetWindowPos(
-                h,
-                None,
-                n.left,
-                n.top,
-                n.width(),
-                n.height(),
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            );
-            if res.is_err() {
-                break;
+            // 隱藏的主視窗：只搬原本跟代理視窗在同一個螢幕的，其餘（例如別處的設定對話框）不動
+            for s in hidden_siblings(pid_of(h), h) {
+                if monitor_of(s) != src.handle {
+                    continue;
+                }
+                let mut r = RECT::default();
+                if GetWindowRect(s, &mut r).is_ok() {
+                    let _ = set_pos(s, map_rect(src.work, dst.work, r.into()));
+                }
             }
-        }
-        if was_max {
-            let _ = ShowWindow(h, SW_MAXIMIZE);
-        }
-        if was_min {
-            let _ = ShowWindow(h, SW_MINIMIZE);
-        }
-        if let Err(e) = res {
-            return Err(MoveError::Denied(e.to_string()));
         }
     }
     Ok(())

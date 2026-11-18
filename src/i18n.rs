@@ -143,6 +143,52 @@ impl Tr {
         self.pick("（點一下切換）", " (click to switch)")
     }
 
+    // 快捷鍵
+    pub fn hotkey_tip(self) -> &'static str {
+        self.pick("快捷鍵設定", "Hotkey settings")
+    }
+    pub fn hotkey_label(self) -> &'static str {
+        self.pick("叫出主視窗的快捷鍵", "Hotkey to show this window")
+    }
+    pub fn hotkey_recording(self) -> &'static str {
+        self.pick("請按下新的快捷鍵…", "Press the new hotkey…")
+    }
+    /// 快捷鍵按鈕的提示：操作方式與組合規則。
+    pub fn hotkey_change_tip(self) -> &'static str {
+        self.pick(
+            "點一下，再按下想要的組合鍵（Esc 取消）\n需包含 Ctrl 或 Alt，主鍵可用 A–Z、0–9、F1–F12。",
+            "Click, then press the combination you want (Esc to cancel)\nMust include Ctrl or Alt; the key can be A–Z, 0–9 or F1–F12.",
+        )
+    }
+    /// 還原按鈕（圈圈箭頭）的提示。
+    pub fn hotkey_reset_tip(self, default_label: &str) -> String {
+        match self.0 {
+            Lang::Zh => format!("還原為預設快捷鍵（{default_label}）"),
+            Lang::En => format!("Reset to the default hotkey ({default_label})"),
+        }
+    }
+    pub fn hotkey_need_modifier(self) -> &'static str {
+        self.pick("請至少搭配 Ctrl 或 Alt。", "Please include Ctrl or Alt.")
+    }
+    pub fn hotkey_in_use(self, label: &str) -> String {
+        match self.0 {
+            Lang::Zh => format!("{label} 已被其他程式使用，請換一組。"),
+            Lang::En => format!("{label} is already used by another program. Please pick another."),
+        }
+    }
+    pub fn hotkey_changed(self, label: &str) -> String {
+        match self.0 {
+            Lang::Zh => format!("快捷鍵已設為 {label}"),
+            Lang::En => format!("Hotkey set to {label}"),
+        }
+    }
+    pub fn hotkey_startup_failed(self, label: &str) -> String {
+        match self.0 {
+            Lang::Zh => format!("快捷鍵 {label} 已被其他程式使用，請按工具列的鍵盤按鈕更換。"),
+            Lang::En => format!("Hotkey {label} is used by another program. Click the keyboard button to change it."),
+        }
+    }
+
     // 工具列提示
     pub fn theme_system(self) -> &'static str {
         self.pick("配色：隨系統", "Theme: follow system")

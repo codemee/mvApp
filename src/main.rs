@@ -2,6 +2,7 @@
 
 mod app;
 mod autostart;
+mod hotkey;
 mod i18n;
 mod icons;
 mod monitors;

@@ -2,16 +2,16 @@
 
 use std::ffi::c_void;
 
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
-use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
+use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromRect};
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetWindow, GetWindowLongW, GetWindowTextLengthW,
-    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, WS_EX_APPWINDOW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetWindow, GetWindowLongW, GetWindowPlacement,
+    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    IsWindowVisible, WINDOWPLACEMENT, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, PWSTR};
 
@@ -37,6 +37,77 @@ struct Ctx {
 
 pub fn hwnd_of(h: isize) -> HWND {
     HWND(h as *mut c_void)
+}
+
+/// 視窗「實際會出現」的矩形：最小化時 `GetWindowRect` 會回傳 (-25600, …) 之類的假座標，
+/// 改取還原後的位置（`rcNormalPosition`）。
+pub fn effective_rect(h: HWND) -> Option<RECT> {
+    unsafe {
+        if IsIconic(h).as_bool() {
+            let mut wp = WINDOWPLACEMENT {
+                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                ..Default::default()
+            };
+            GetWindowPlacement(h, &mut wp).ok()?;
+            Some(wp.rcNormalPosition)
+        } else {
+            let mut r = RECT::default();
+            GetWindowRect(h, &mut r).ok()?;
+            Some(r)
+        }
+    }
+}
+
+/// 視窗所在螢幕（依 [`effective_rect`] 判斷，最小化的視窗也能正確歸屬）。
+pub fn monitor_of(h: HWND) -> isize {
+    match effective_rect(h) {
+        Some(r) => unsafe { MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST).0 as isize },
+        None => 0,
+    }
+}
+
+/// 同一個行程中、目前隱藏但有標題的頂層視窗。
+/// Delphi 等程式的工作列按鈕是一個隱形的代理視窗，真正的主視窗是隱藏的，
+/// 搬移代理視窗時必須連同它們一起搬，否則下次顯示時仍會出現在原本（甚至已不存在）的位置。
+pub fn hidden_siblings(pid: u32, except: HWND) -> Vec<HWND> {
+    struct C {
+        pid: u32,
+        except: HWND,
+        out: Vec<HWND>,
+    }
+    unsafe extern "system" fn cb(hwnd: HWND, lp: LPARAM) -> BOOL {
+        let c = unsafe { &mut *(lp.0 as *mut C) };
+        unsafe {
+            if hwnd == c.except || IsWindowVisible(hwnd).as_bool() {
+                return BOOL(1);
+            }
+            let mut p = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut p));
+            if p != c.pid || GetWindowTextLengthW(hwnd) <= 0 {
+                return BOOL(1);
+            }
+            let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            if ex & WS_EX_TOOLWINDOW.0 != 0 {
+                return BOOL(1);
+            }
+            let mut r = RECT::default();
+            if GetWindowRect(hwnd, &mut r).is_ok() && r.right - r.left > 1 && r.bottom - r.top > 1 {
+                c.out.push(hwnd);
+            }
+        }
+        BOOL(1)
+    }
+    let mut c = C { pid, except, out: Vec::new() };
+    unsafe {
+        let _ = EnumWindows(Some(cb), LPARAM(&mut c as *mut _ as isize));
+    }
+    c.out
+}
+
+pub fn pid_of(h: HWND) -> u32 {
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+    pid
 }
 
 fn exe_path_of(pid: u32) -> String {
@@ -99,12 +170,11 @@ unsafe extern "system" fn enum_cb(hwnd: HWND, lp: LPARAM) -> BOOL {
         if pid == ctx.own_pid {
             return BOOL(1);
         }
-        let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
         ctx.out.push(WinInfo {
             hwnd: hwnd.0 as isize,
             title,
             exe_path: exe_path_of(pid),
-            monitor: mon.0 as isize,
+            monitor: monitor_of(hwnd),
             minimized: IsIconic(hwnd).as_bool(),
         });
     }

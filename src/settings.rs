@@ -1,20 +1,23 @@
-//! 使用者設定（配色、語言），存於 %APPDATA%\mvapp\settings.txt。
+//! 使用者設定（配色、語言、快捷鍵），存於 %APPDATA%\mvapp\settings.txt。
 
 use std::path::PathBuf;
 
 use eframe::egui::ThemePreference;
 
+use crate::hotkey::{self, Hotkey};
 use crate::i18n::LangPref;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Settings {
     pub theme: ThemePreference,
     pub lang: LangPref,
+    /// 叫出主視窗的全域快捷鍵。
+    pub hotkey: Hotkey,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { theme: ThemePreference::System, lang: LangPref::System }
+        Settings { theme: ThemePreference::System, lang: LangPref::System, hotkey: hotkey::DEFAULT }
     }
 }
 
@@ -46,6 +49,11 @@ impl Settings {
                         s.lang = l;
                     }
                 }
+                Some(("hotkey", v)) => {
+                    if let Some(h) = Hotkey::parse(v.trim()) {
+                        s.hotkey = h;
+                    }
+                }
                 _ => {}
             }
         }
@@ -58,6 +66,12 @@ impl Settings {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(p, format!("theme={}\nlang={}\n", theme_str(self.theme), self.lang.as_str()));
+        let text = format!(
+            "theme={}\nlang={}\nhotkey={}\n",
+            theme_str(self.theme),
+            self.lang.as_str(),
+            self.hotkey.label()
+        );
+        let _ = std::fs::write(p, text);
     }
 }

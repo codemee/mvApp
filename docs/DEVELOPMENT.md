@@ -48,6 +48,7 @@
 | `src/mover.rs` | 搬移視窗的座標換算與 Win32 呼叫 |
 | `src/toolbar.rs` | 工具列圖示按鈕與以 painter 繪製的圖示 |
 | `src/tray.rs` | 系統匣圖示、右鍵選單、顯示／隱藏主視窗 |
+| `src/hotkey.rs` | 全域快捷鍵：組合鍵的解析與格式、專用執行緒註冊與接收 `WM_HOTKEY` |
 | `src/single_instance.rs` | 單一執行個體（具名 Mutex／Event） |
 | `src/autostart.rs` | 開機自動執行（寫入登錄檔） |
 | `src/settings.rs` | 設定檔的讀寫 |
@@ -64,7 +65,7 @@
   - 具有 `WS_EX_TOOLWINDOW` 或 `WS_EX_NOACTIVATE` 且沒有 `WS_EX_APPWINDOW` 的視窗。
   - 被 DWM「cloak」的視窗（例如其他虛擬桌面上的 UWP 視窗）。
   - 沒有標題的視窗、桌面外殼視窗（`Progman`、`WorkerW`）、以及 mvApp 自己的視窗。
-- 每個視窗所在的螢幕由 `MonitorFromWindow(..., MONITOR_DEFAULTTONEAREST)` 決定。
+- 每個視窗所在的螢幕由 `effective_rect` 取得的矩形決定（`MonitorFromRect`）：一般視窗用 `GetWindowRect`，最小化的視窗改用 `GetWindowPlacement` 的 `rcNormalPosition`。最小化時 `GetWindowRect` 會回傳 (-25600, …) 之類的假座標，不能用來判斷螢幕。
 - 介面每 600 ms 重新列舉一次；拖曳進行中暫停，避免清單抖動。
 
 ### 圖示取得（`icons.rs`）
@@ -82,8 +83,8 @@
 - 座標換算 `map_rect`：把視窗的位置與大小，依「來源螢幕工作區 → 目標螢幕工作區」的比例換算，再夾限在目標工作區內。這個函式是純函式，有單元測試。
 - 流程：
   - 一般視窗：`GetWindowRect` → 換算 → `SetWindowPos`。
-  - 最大化的視窗：先還原、搬移，再最大化。
-  - 最小化的視窗：先還原、搬移，再最小化（因此「先最大化再最小化」的視窗搬完會變成一般狀態）。
+  - 最大化／最小化的視窗：`GetWindowPlacement` 取得 `rcNormalPosition` → 換算 → `SetWindowPlacement`，只改「還原後的位置」並維持原本的顯示狀態，不會先還原再重新最小化而閃動。
+  - 最小化視窗的隱藏主視窗：Delphi 等程式的工作列按鈕是一個隱形的代理視窗（例如 PortableApps 的 `TApplication`），真正的主視窗（`TfrmMenu`）是同行程中隱藏的另一個視窗。搬移最小化的視窗時，會用 `hidden_siblings` 找出同行程、隱藏、有標題、非工具視窗，且原本與它在同一個螢幕的視窗，一併換算搬移；否則下次顯示時仍會出現在舊位置（甚至已不存在的螢幕範圍）。
 - 跨 DPI 的螢幕之間，系統可能在第一次移動後又調整大小，所以 `SetWindowPos` 會呼叫兩次。
 - 失敗（常見原因是目標視窗以系統管理員身分執行，被 UIPI 擋下）會以 `MoveError` 回傳，由介面依語言顯示訊息，不會讓程式當掉。
 
@@ -105,6 +106,21 @@
 - 右鍵選單「結束」：設定旗標、對主視窗送 `WM_CLOSE` 走正常關閉流程；若視窗隱藏時沒有被處理，1.5 秒後強制結束行程。
 - 若系統匣圖示建立失敗，程式會直接顯示主視窗，且關閉視窗就是結束程式，避免使用者找不到它。
 
+### 全域快捷鍵（`hotkey.rs`、`app.rs`）
+
+- 預設 `Ctrl+Shift+M`，按下時呼叫 `tray::show_main()` 顯示主視窗並喚到前景。使用 Win32 `RegisterHotKey`（加上 `MOD_NOREPEAT`），不需額外相依套件。
+- **專用執行緒**：`RegisterHotKey(NULL, …)` 要求註冊與接收 `WM_HOTKEY` 在同一條執行緒，而 eframe 的事件迴圈不處理執行緒訊息。所以 `hotkey::start` 另開一條執行緒跑 `GetMessageW` 迴圈：
+  - 先用 `PeekMessageW` 建立訊息佇列，再把執行緒 ID 回報給呼叫端（避免 `PostThreadMessageW` 太早送出而失敗）。
+  - 變更快捷鍵時，`hotkey::set` 把新組合與回覆用的 channel 送進佇列，以 `PostThreadMessageW(WM_APP)` 喚醒該執行緒，由它取消舊註冊、註冊新組合，並同步回傳成功與否（失敗通常是被其他程式佔用）。
+- **組合鍵格式**：`Hotkey { ctrl, alt, shift, vk }`。文字格式如 `Ctrl+Shift+M`，同時是設定檔的存放格式（`hotkey=Ctrl+Shift+M`），`parse` 不分大小寫。必須包含 `Ctrl` 或 `Alt`；主鍵限 `A`–`Z`、`0`–`9`、`F1`–`F12`。egui 按鍵由 `Key::name()` 轉為虛擬鍵碼。設定檔內容不合法時退回預設值。
+- **設定面板**（`app.rs`）：工具列的鍵盤按鈕切換 `hotkey_panel`，面板是浮動的 `egui::Area`（`Order::Foreground`，靠右對齊工具列下緣），疊在內容上方而不是 `Panel`，所以展開時不會壓縮主視窗的版面。寬度上限 360，視窗太窄時隨視窗縮小。
+  - 錄製：點按鈕後 `capturing = true`，並**先取消全域註冊**，否則按下舊組合時訊息會被全域快捷鍵攔走，視窗收不到按鍵。下一個 `Event::Key`（按下、非重複）即為新組合；`Esc` 取消。
+  - 套用：`apply_hotkey` 先註冊；成功才寫入設定，失敗則恢復舊的註冊並顯示「已被其他程式使用」。
+  - 離開錄製的所有路徑（取消、收合面板、關閉視窗縮回系統匣、視窗失去焦點）都會呼叫 `cancel_capture` 恢復註冊，避免快捷鍵停留在未註冊的狀態。
+- 面板內容：第一行說明文字，第二行快捷鍵按鈕與「還原預設」圖示（`toolbar::icon_reset`，逆時針圈圈箭頭），列高固定 34 讓兩者垂直置中。操作方式與組合規則放在快捷鍵按鈕的 hover 提示，面板上只在出錯時才多一行紅字。
+- 注意：`ui()` 開頭會複製一份 `new_settings` 給工具列修改配色與語言，最後再與 `self.settings` 比對後寫回。快捷鍵是由面板在同一個影格稍後才更新的，所以寫回前必須先把 `new_settings.hotkey` 設成目前的值，否則舊複本會把剛套用的快捷鍵蓋回去（畫面與設定檔還原成舊值，實際註冊的卻是新值）。
+- 啟動時註冊失敗會在狀態列提示（`Status::HotkeyStartupFailed`），不會中斷程式。
+
 ### 單一執行個體（`single_instance.rs`）
 
 - 啟動最早期建立具名 Mutex `Local\mvApp.SingleInstance`；若已存在（`ERROR_ALREADY_EXISTS`），代表已有實例。
@@ -119,11 +135,12 @@
 
 ### 設定與多語系（`settings.rs`、`i18n.rs`）
 
-- 設定檔位於 `%APPDATA%\mvapp\settings.txt`，內容是兩行 `key=value`：
+- 設定檔位於 `%APPDATA%\mvapp\settings.txt`，內容是三行 `key=value`：
 
   ```
   theme=system|light|dark
   lang=system|zh|en
+  hotkey=Ctrl+Shift+M
   ```
 
   只有使用者切換時才會寫入；寫入失敗時靜默略過（設定不是關鍵功能）。
@@ -149,6 +166,7 @@ cargo test
 ```
 
 - `mover`：座標換算的單元測試（同尺寸螢幕、不同尺寸螢幕、夾限）。
+- `hotkey`：組合鍵的格式化與解析（含不合法輸入）、egui 按鍵轉虛擬鍵碼。實際的註冊與觸發不在單元測試內，需手動驗證。
 - `smoke`：螢幕、視窗、圖示列舉的煙霧測試。這些需要在有桌面的登入工作階段中執行。
 - `autostart`：實際寫入再刪除 `HKCU` 的 `Run` 值。若執行時使用者已啟用開機自動執行，測試會略過，避免動到真實設定。
 

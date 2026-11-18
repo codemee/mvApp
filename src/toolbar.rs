@@ -97,6 +97,41 @@ pub fn icon_refresh(p: &Painter, r: Rect, fg: Color32, _bg: Color32) {
     p.add(Shape::convex_polygon(vec![e + t * 4.0, e - t * 1.8 + n * 3.4, e - t * 1.8 - n * 3.4], fg, Stroke::NONE));
 }
 
+/// 還原預設：逆時針的圈圈箭頭（與重新整理的順時針箭頭左右相反）。
+pub fn icon_reset(p: &Painter, r: Rect, fg: Color32, _bg: Color32) {
+    let c = r.center();
+    let rad = radius(r) * 1.0;
+    let (from, to) = (-40.0f32, 250.0f32);
+    // x 軸鏡射：以 -cos 取代 cos
+    let pts: Vec<Pos2> = arc_points(c, rad, from, to)
+        .into_iter()
+        .map(|q| Pos2::new(2.0 * c.x - q.x, q.y))
+        .collect();
+    p.add(Shape::line(pts, Stroke::new(LINE, fg)));
+    let a = to.to_radians();
+    let e = c + Vec2::new(-a.cos(), a.sin()) * rad;
+    let t = Vec2::new(a.sin(), a.cos());
+    let n = Vec2::new(-a.cos(), a.sin());
+    p.add(Shape::convex_polygon(vec![e + t * 4.0, e - t * 1.8 + n * 3.4, e - t * 1.8 - n * 3.4], fg, Stroke::NONE));
+}
+
+/// 鍵盤：圓角外框、兩排按鍵與空白鍵。
+pub fn icon_keyboard(p: &Painter, r: Rect, fg: Color32, _bg: Color32) {
+    // 尺寸與其他圖示（圓形直徑約 12）相稱：寬約 16、高約 11
+    let body = Rect::from_center_size(r.center(), Vec2::new(r.width() * 0.8, r.height() * 0.55));
+    p.rect_stroke(body, 2.2, Stroke::new(LINE, fg), egui::StrokeKind::Inside);
+    let span = (body.width() - 7.0) / 3.0;
+    for row in 0..2 {
+        let y = body.top() + 3.0 + row as f32 * 2.6;
+        for i in 0..4 {
+            p.circle_filled(Pos2::new(body.left() + 3.5 + i as f32 * span, y), 0.85, fg);
+        }
+    }
+    let y = body.top() + 8.0;
+    let cx = body.center().x;
+    p.line_segment([Pos2::new(cx - 3.0, y), Pos2::new(cx + 3.0, y)], Stroke::new(1.2, fg));
+}
+
 /// 一般工具按鈕的圓角。
 pub const RADIUS_NORMAL: f32 = 4.0;
 /// 狀態（三態切換）按鈕的圓角。
@@ -114,10 +149,25 @@ pub fn icon_button(
     idle_bg: Color32,
     hover_bg: Color32,
 ) -> bool {
+    icon_button_ex(ui, tip, icon, corner, fg, idle_bg, hover_bg, false)
+}
+
+/// 同 [`icon_button`]；`active` 為 true 時（例如對應的面板正展開）持續顯示底色。
+#[allow(clippy::too_many_arguments)]
+pub fn icon_button_ex(
+    ui: &mut egui::Ui,
+    tip: &str,
+    icon: IconFn,
+    corner: f32,
+    fg: Color32,
+    idle_bg: Color32,
+    hover_bg: Color32,
+    active: bool,
+) -> bool {
     let (rect, resp) = ui.allocate_exact_size(BTN, egui::Sense::click());
-    let hovered = resp.hovered();
-    let bg = if hovered { hover_bg } else { idle_bg };
-    if hovered {
+    let filled = resp.hovered() || active;
+    let bg = if filled { hover_bg } else { idle_bg };
+    if filled {
         ui.painter().rect_filled(rect, corner, hover_bg);
     }
     let canvas = Rect::from_center_size(rect.center(), Vec2::splat(CANVAS));

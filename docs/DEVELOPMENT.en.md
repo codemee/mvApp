@@ -48,6 +48,7 @@ For general usage see the [README](../README.en.md). This document is for develo
 | `src/mover.rs` | Coordinate mapping and Win32 calls for moving a window |
 | `src/toolbar.rs` | Toolbar icon buttons and the icons drawn with a painter |
 | `src/tray.rs` | Tray icon, right-click menu, showing/hiding the main window |
+| `src/hotkey.rs` | Global hotkey: parsing and formatting key combinations, a dedicated thread that registers it and receives `WM_HOTKEY` |
 | `src/single_instance.rs` | Single instance (named mutex / event) |
 | `src/autostart.rs` | Run at startup (registry) |
 | `src/settings.rs` | Reading and writing the settings file |
@@ -64,7 +65,7 @@ For general usage see the [README](../README.en.md). This document is for develo
   - Windows with `WS_EX_TOOLWINDOW` or `WS_EX_NOACTIVATE` and without `WS_EX_APPWINDOW`.
   - Windows "cloaked" by DWM (for example UWP windows on other virtual desktops).
   - Windows without a title, the desktop shell windows (`Progman`, `WorkerW`), and mvApp's own window.
-- The monitor a window is on comes from `MonitorFromWindow(..., MONITOR_DEFAULTTONEAREST)`.
+- The monitor a window is on comes from the rectangle returned by `effective_rect` (`MonitorFromRect`): `GetWindowRect` for normal windows, and `rcNormalPosition` from `GetWindowPlacement` for minimized ones. A minimized window's `GetWindowRect` returns fake coordinates such as (-25600, ...), which can't be used to find its monitor.
 - The UI re-enumerates every 600 ms, and pauses while a drag is in progress so the list doesn't jitter.
 
 ### Icon retrieval (`icons.rs`)
@@ -82,8 +83,8 @@ When converting an `HICON` to RGBA, old icons without an alpha channel get their
 - Coordinate mapping `map_rect`: the window's position and size are scaled by the ratio "source monitor work area -> target monitor work area" and then clamped into the target work area. It is a pure function with unit tests.
 - Flow:
   - Normal window: `GetWindowRect` -> map -> `SetWindowPos`.
-  - Maximized window: restore, move, then maximize again.
-  - Minimized window: restore, move, then minimize again (so a window that was maximized and then minimized ends up in its normal state).
+  - Maximized / minimized window: read `rcNormalPosition` with `GetWindowPlacement` -> map -> `SetWindowPlacement`. Only the "restored position" changes and the show state is kept, so there is no flicker from restoring and re-minimizing.
+  - Hidden main windows of minimized windows: the taskbar button of Delphi-style programs is an invisible proxy window (for example PortableApps' `TApplication`), while the real main window (`TfrmMenu`) is another, hidden window in the same process. When moving a minimized window, `hidden_siblings` finds windows of the same process that are hidden, titled, not tool windows and were on the same monitor, and maps and moves them too; otherwise they would reappear at the old position (possibly outside any monitor) the next time they are shown.
 - Between monitors with different DPI, the system may resize the window after the first move, so `SetWindowPos` is called twice.
 - Failures (most commonly the target window runs as administrator and UIPI blocks the move) are returned as a `MoveError`; the UI translates the message for the current language and the program never crashes.
 
@@ -105,6 +106,21 @@ When converting an `HICON` to RGBA, old icons without an alpha channel get their
 - The right-click menu "Exit" sets a flag and posts `WM_CLOSE` to the main window to follow the normal close path; if that is not handled while the window is hidden, the process is forcibly ended after 1.5 seconds.
 - If creating the tray icon fails, the main window is shown directly and closing it quits the program, so users can't lose the app.
 
+### Global hotkey (`hotkey.rs`, `app.rs`)
+
+- Default `Ctrl+Shift+M`. Pressing it calls `tray::show_main()`, which shows the main window and brings it to the foreground. It uses Win32 `RegisterHotKey` (with `MOD_NOREPEAT`), so no extra dependency is needed.
+- **Dedicated thread**: `RegisterHotKey(NULL, ...)` requires registering and receiving `WM_HOTKEY` on the same thread, and eframe's event loop does not process thread messages. So `hotkey::start` spawns a thread running a `GetMessageW` loop:
+  - It first creates the message queue with `PeekMessageW` and then reports its thread ID to the caller (so an early `PostThreadMessageW` can't fail).
+  - To change the hotkey, `hotkey::set` sends the new combination and a reply channel into a queue and wakes the thread with `PostThreadMessageW(WM_APP)`; the thread unregisters the old one, registers the new one and synchronously returns whether it worked (failure usually means another program has it).
+- **Key format**: `Hotkey { ctrl, alt, shift, vk }`. The text form, such as `Ctrl+Shift+M`, is also the settings file format (`hotkey=Ctrl+Shift+M`); `parse` is case-insensitive. It must include `Ctrl` or `Alt`; the key is limited to `A`-`Z`, `0`-`9` and `F1`-`F12`. egui keys are turned into virtual-key codes through `Key::name()`. An invalid value in the settings file falls back to the default.
+- **Settings panel** (`app.rs`): the keyboard button on the toolbar toggles `hotkey_panel`; the panel is a floating `egui::Area` (`Order::Foreground`, right-aligned just below the toolbar) drawn over the content rather than a `Panel`, so opening it does not squeeze the main window's layout. Its width is capped at 360 and shrinks with a narrow window.
+  - Recording: clicking the button sets `capturing = true` and **unregisters the global hotkey first**; otherwise pressing the old combination would be taken by the global hotkey and the window would never see the key. The next `Event::Key` (pressed, not a repeat) is the new combination; `Esc` cancels.
+  - Applying: `apply_hotkey` registers first; only on success is it written to the settings, otherwise the old registration is restored and "already used by another program" is shown.
+  - Every path out of recording (cancel, collapsing the panel, closing the window to the tray, losing focus) calls `cancel_capture` to restore the registration, so the hotkey is never left unregistered.
+- Panel contents: a caption on the first line, then the hotkey button and the "reset to default" icon (`toolbar::icon_reset`, a counter-clockwise circular arrow) on the second, with a fixed row height of 34 so the two are vertically centered. How to use it and the combination rules are in the hotkey button's hover tooltip; the panel only gets an extra red line when something goes wrong.
+- Gotcha: at the start of `ui()` a copy `new_settings` is made for the toolbar to change theme and language, and it is compared with `self.settings` and written back at the end. The hotkey is updated by the panel later in the same frame, so `new_settings.hotkey` must be set to the current value before writing back; otherwise the stale copy overwrites the hotkey that was just applied (the UI and the settings file revert to the old value while the new one stays registered).
+- A registration failure at startup is reported in the status bar (`Status::HotkeyStartupFailed`) and does not stop the program.
+
 ### Single instance (`single_instance.rs`)
 
 - Very early at startup it creates the named mutex `Local\mvApp.SingleInstance`; if it already exists (`ERROR_ALREADY_EXISTS`), another instance is running.
@@ -119,11 +135,12 @@ When converting an `HICON` to RGBA, old icons without an alpha channel get their
 
 ### Settings and localization (`settings.rs`, `i18n.rs`)
 
-- The settings file is `%APPDATA%\mvapp\settings.txt`, two `key=value` lines:
+- The settings file is `%APPDATA%\mvapp\settings.txt`, three `key=value` lines:
 
   ```
   theme=system|light|dark
   lang=system|zh|en
+  hotkey=Ctrl+Shift+M
   ```
 
   It is written only when the user changes something; write failures are silently ignored (settings are not critical).
@@ -149,6 +166,7 @@ cargo test
 ```
 
 - `mover`: unit tests for coordinate mapping (same-size monitors, different-size monitors, clamping).
+- `hotkey`: formatting and parsing of key combinations (including invalid input) and egui key to virtual-key mapping. The actual registration and triggering are not unit-tested and must be verified by hand.
 - `smoke`: smoke tests for monitor, window and icon enumeration. They need to run inside a logged-in desktop session.
 - `autostart`: actually writes and then deletes the `Run` value under `HKCU`. If the user already has run-at-startup enabled when the test runs, it is skipped so the real setting is never touched.
 
